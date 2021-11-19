@@ -32,7 +32,7 @@ import { generateConfigurations } from './commands/generateConfigurations';
 import { loadCache, saveCache } from './helpers/cache';
 import { mint } from './commands/mint';
 import { signMetadata } from './commands/sign';
-import { signAllMetadataFromCandyMachine } from './commands/signAll';
+import { getAccountsByCreatorAddress, signAllMetadataFromCandyMachine } from './commands/signAll';
 import log from 'loglevel';
 import { createMetadataFiles } from './helpers/metadata';
 import { createGenerativeArt } from './commands/createArt';
@@ -722,6 +722,29 @@ programCommand('mint_one_token')
     log.info('mint_one_token finished', tx);
   });
 
+programCommand('mint_tokens')
+  .option('-n, --number <number>', 'Number of tokens to mint', '1')
+  .action(async (directory, cmd) => {
+    const {keypair, env, cacheName, number, rpcUrl} = cmd.opts();
+
+    const parsedNumber = parseInt(number);
+
+    const cacheContent = loadCache(cacheName, env);
+    const configAddress = new PublicKey(cacheContent.program.config);
+    for (let i = 0; i < parsedNumber; i++) {
+      await mint(
+        keypair,
+        env,
+        configAddress,
+        cacheContent.program.uuid,
+        rpcUrl,
+      );
+      log.info(`token ${i} minted`);
+    }
+
+    log.info(`minted ${parsedNumber} tokens`)
+  });
+
 programCommand('sign')
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   .option('-m, --metadata <string>', 'base58 metadata account id')
@@ -767,6 +790,22 @@ programCommand('sign_all')
     );
   });
 
+programCommand('get_all_mint_addresses')
+  .action(async (directory, cmd) => {
+    const { env, cacheName, keypair} = cmd.opts();
+
+    const cacheContent = loadCache(cacheName, env);
+    const walletKeyPair = loadWalletKey(keypair);
+    const anchorProgram = await loadCandyProgram(walletKeyPair, env);
+
+    const accountsByCreatorAddress = await getAccountsByCreatorAddress(cacheContent.candyMachineAddress, anchorProgram.provider.connection);
+    const addresses = accountsByCreatorAddress.map(it => {
+      return new PublicKey(it[0].mint).toBase58()
+    });
+
+    console.log(JSON.stringify(addresses, null, 2))
+  });
+
 programCommand('generate_art_configurations')
   .argument('<directory>', 'Directory containing traits named from 0-n', val =>
     fs.readdirSync(`${val}`),
@@ -798,8 +837,12 @@ programCommand('create_generative_art')
     'Location of the traits configuration file',
     './traits-configuration.json',
   )
+  .option(
+    '-o, --output-location <string>',
+    'If you wish to do image generation elsewhere, skip it and dump randomized sets to file',
+  )
   .action(async (directory, cmd) => {
-    const { numberOfImages, configLocation } = cmd.opts();
+    const { numberOfImages, configLocation, outputLocation } = cmd.opts();
 
     log.info('Loaded configuration file');
 
@@ -812,9 +855,14 @@ programCommand('create_generative_art')
     log.info('JSON files have been created within the assets directory');
 
     // 2. piecemeal generate the images
-    await createGenerativeArt(configLocation, randomSets);
+    if (!outputLocation) {
+      await createGenerativeArt(configLocation, randomSets);
+      log.info('Images have been created successfully!');
+    } else {
+      fs.writeFileSync(outputLocation, JSON.stringify(randomSets));
 
-    log.info('Images have been created successfully!');
+      log.info('Traits written!');
+    }
   });
 
 function programCommand(name: string) {
